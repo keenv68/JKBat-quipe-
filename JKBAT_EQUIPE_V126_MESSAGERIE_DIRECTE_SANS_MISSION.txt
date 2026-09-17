@@ -1,0 +1,302 @@
+-- JKBat Équipe v1.0.26 / JKBat Pro
+-- Messagerie directe Équipe <-> JKBat Pro SANS mission / fiche obligatoire.
+-- À exécuter UNE FOIS dans Supabase > SQL Editor > Run.
+--
+-- Objectifs :
+-- 1) Le salarié peut écrire à JKBat Pro même sans mission active.
+-- 2) JKBat Pro peut répondre directement au salarié.
+-- 3) Les messages non lus peuvent être comptés côté Équipe et côté Pro.
+-- 4) JKBat Pro peut supprimer un message ou vider la conversation "pour tous".
+-- 5) La messagerie liée aux missions existante reste intacte.
+
+create extension if not exists pgcrypto;
+
+create table if not exists public.jkbat_staff_direct_messages (
+  id uuid primary key default gen_random_uuid(),
+  staff_user_id uuid not null references auth.users(id) on delete cascade,
+  sender_user_id uuid,
+  sender_role text not null check (sender_role in ('staff','admin','system')),
+  sender_name text,
+  body text not null default '',
+  sent_at timestamptz not null default now(),
+  staff_read_at timestamptz,
+  admin_read_at timestamptz,
+  deleted_for_all boolean not null default false,
+  deleted_at timestamptz,
+  deleted_by text,
+  event text
+);
+
+create index if not exists jkbat_staff_direct_messages_staff_idx
+  on public.jkbat_staff_direct_messages(staff_user_id, sent_at desc);
+
+alter table public.jkbat_staff_direct_messages enable row level security;
+
+-- Lecture : le salarié ne voit que sa conversation ; l'admin voit tout.
+drop policy if exists jkbat_staff_direct_select on public.jkbat_staff_direct_messages;
+create policy jkbat_staff_direct_select
+on public.jkbat_staff_direct_messages
+for select
+to authenticated
+using (
+  staff_user_id = auth.uid()
+  or public.jkbat_is_admin()
+);
+
+-- Les écritures passent volontairement par les RPC ci-dessous.
+revoke insert, update, delete on public.jkbat_staff_direct_messages from authenticated;
+grant select on public.jkbat_staff_direct_messages to authenticated;
+
+-- =====================================================================
+-- SALARIÉ -> JKBAT PRO, sans assignment_id.
+-- =====================================================================
+create or replace function public.jkbat_staff_send_direct_admin_message(
+  p_body text
+) returns uuid
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_body text := trim(coalesce(p_body,''));
+  v_staff_name text;
+  v_id uuid;
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  if not public.jkbat_staff_is_active(auth.uid()) then raise exception 'staff account inactive'; end if;
+  if v_body='' then raise exception 'message required'; end if;
+  if length(v_body)>1000 then raise exception 'message too long'; end if;
+
+  select coalesce(nullif(trim(p.full_name),''),nullif(trim(p.email),''),'Salarié JKBat')
+    into v_staff_name
+  from public.jkbat_staff_profiles p
+  where p.id=auth.uid();
+
+  insert into public.jkbat_staff_direct_messages(
+    staff_user_id,sender_user_id,sender_role,sender_name,body,sent_at,
+    staff_read_at,admin_read_at
+  ) values(
+    auth.uid(),auth.uid(),'staff',coalesce(v_staff_name,'Salarié JKBat'),v_body,now(),
+    now(),null
+  ) returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+-- =====================================================================
+-- JKBAT PRO -> SALARIÉ, sans assignment_id.
+-- =====================================================================
+create or replace function public.jkbat_admin_send_direct_staff_message(
+  p_staff_user_id uuid,
+  p_body text
+) returns uuid
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_body text := trim(coalesce(p_body,''));
+  v_id uuid;
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  if not public.jkbat_is_admin() then raise exception 'admin required'; end if;
+  if p_staff_user_id is null then raise exception 'staff user required'; end if;
+  if v_body='' then raise exception 'message required'; end if;
+  if length(v_body)>1000 then raise exception 'message too long'; end if;
+
+  if not exists(select 1 from public.jkbat_staff_profiles p where p.id=p_staff_user_id) then
+    raise exception 'staff account not found';
+  end if;
+
+  insert into public.jkbat_staff_direct_messages(
+    staff_user_id,sender_user_id,sender_role,sender_name,body,sent_at,
+    staff_read_at,admin_read_at
+  ) values(
+    p_staff_user_id,auth.uid(),'admin','JKBat Pro',v_body,now(),
+    null,now()
+  ) returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+-- =====================================================================
+-- MARQUER COMME LU CÔTÉ SALARIÉ.
+-- =====================================================================
+create or replace function public.jkbat_staff_mark_direct_messages_read()
+returns integer
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_count integer;
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  if not public.jkbat_staff_is_active(auth.uid()) then raise exception 'staff account inactive'; end if;
+
+  update public.jkbat_staff_direct_messages
+  set staff_read_at=coalesce(staff_read_at,now())
+  where staff_user_id=auth.uid()
+    and sender_role='admin'
+    and deleted_for_all=false
+    and staff_read_at is null;
+
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+-- =====================================================================
+-- MARQUER COMME LU CÔTÉ JKBAT PRO.
+-- =====================================================================
+create or replace function public.jkbat_admin_mark_direct_messages_read(
+  p_staff_user_id uuid
+) returns integer
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_count integer;
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  if not public.jkbat_is_admin() then raise exception 'admin required'; end if;
+
+  update public.jkbat_staff_direct_messages
+  set admin_read_at=coalesce(admin_read_at,now())
+  where staff_user_id=p_staff_user_id
+    and sender_role='staff'
+    and deleted_for_all=false
+    and admin_read_at is null;
+
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+-- =====================================================================
+-- SUPPRESSION D'UN MESSAGE PAR JKBAT PRO, POUR TOUS.
+-- Soft-delete pour garder un historique technique sans afficher le contenu.
+-- =====================================================================
+create or replace function public.jkbat_admin_delete_direct_staff_message(
+  p_message_id uuid
+) returns void
+language plpgsql
+security definer
+set search_path=public
+as $$
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  if not public.jkbat_is_admin() then raise exception 'admin required'; end if;
+
+  update public.jkbat_staff_direct_messages
+  set deleted_for_all=true,
+      deleted_at=now(),
+      deleted_by='admin',
+      body=''
+  where id=p_message_id
+    and sender_role<>'system'
+    and deleted_for_all=false;
+
+  if not found then raise exception 'message not found'; end if;
+end;
+$$;
+
+-- =====================================================================
+-- VIDER TOUTE LA CONVERSATION DIRECTE D'UN SALARIÉ.
+-- =====================================================================
+create or replace function public.jkbat_admin_clear_direct_staff_messages(
+  p_staff_user_id uuid
+) returns integer
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_count integer;
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  if not public.jkbat_is_admin() then raise exception 'admin required'; end if;
+
+  update public.jkbat_staff_direct_messages
+  set deleted_for_all=true,
+      deleted_at=now(),
+      deleted_by='admin',
+      body=''
+  where staff_user_id=p_staff_user_id
+    and sender_role<>'system'
+    and deleted_for_all=false;
+
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+-- =====================================================================
+-- COMPTEURS DE NON-LUS.
+-- =====================================================================
+create or replace function public.jkbat_staff_direct_unread_count()
+returns integer
+language sql
+security definer
+set search_path=public
+as $$
+  select count(*)::integer
+  from public.jkbat_staff_direct_messages
+  where staff_user_id=auth.uid()
+    and sender_role='admin'
+    and deleted_for_all=false
+    and staff_read_at is null;
+$$;
+
+create or replace function public.jkbat_admin_direct_unread_count(
+  p_staff_user_id uuid
+) returns integer
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare v_count integer;
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  if not public.jkbat_is_admin() then raise exception 'admin required'; end if;
+  select count(*)::integer into v_count
+  from public.jkbat_staff_direct_messages
+  where staff_user_id=p_staff_user_id
+    and sender_role='staff'
+    and deleted_for_all=false
+    and admin_read_at is null;
+  return coalesce(v_count,0);
+end;
+$$;
+
+-- =====================================================================
+-- DROITS RPC.
+-- =====================================================================
+revoke all on function public.jkbat_staff_send_direct_admin_message(text) from public;
+revoke all on function public.jkbat_admin_send_direct_staff_message(uuid,text) from public;
+revoke all on function public.jkbat_staff_mark_direct_messages_read() from public;
+revoke all on function public.jkbat_admin_mark_direct_messages_read(uuid) from public;
+revoke all on function public.jkbat_admin_delete_direct_staff_message(uuid) from public;
+revoke all on function public.jkbat_admin_clear_direct_staff_messages(uuid) from public;
+revoke all on function public.jkbat_staff_direct_unread_count() from public;
+revoke all on function public.jkbat_admin_direct_unread_count(uuid) from public;
+
+grant execute on function public.jkbat_staff_send_direct_admin_message(text) to authenticated;
+grant execute on function public.jkbat_admin_send_direct_staff_message(uuid,text) to authenticated;
+grant execute on function public.jkbat_staff_mark_direct_messages_read() to authenticated;
+grant execute on function public.jkbat_admin_mark_direct_messages_read(uuid) to authenticated;
+grant execute on function public.jkbat_admin_delete_direct_staff_message(uuid) to authenticated;
+grant execute on function public.jkbat_admin_clear_direct_staff_messages(uuid) to authenticated;
+grant execute on function public.jkbat_staff_direct_unread_count() to authenticated;
+grant execute on function public.jkbat_admin_direct_unread_count(uuid) to authenticated;
+
+NOTIFY pgrst, 'reload schema';
+
+-- IMPORTANT : après ce SQL, JKBat Équipe doit appeler
+--   jkbat_staff_send_direct_admin_message(p_body)
+-- quand aucune mission n'est liée.
+-- JKBat Pro doit lire public.jkbat_staff_direct_messages et utiliser les RPC admin ci-dessus.
+-- La messagerie de mission existante n'est pas modifiée.

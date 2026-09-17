@@ -1,0 +1,149 @@
+-- JKBat Équipe v1.0.25
+-- Correctif : permettre « Contacter JKBat » même sans mission/f​​iche active.
+-- À exécuter UNE FOIS dans Supabase > SQL Editor > Run.
+--
+-- Principe : on crée pour chaque salarié actif une mission technique invisible côté métier,
+-- utilisée uniquement comme ancre de conversation. Elle réutilise la messagerie existante
+-- jkbat_staff_reports.staff_messages : les notifications et la suppression depuis JKBat Pro
+-- continuent donc de fonctionner avec les mécanismes déjà en place.
+
+-- 1) Créer l'ancre de messagerie pour tous les salariés actifs qui n'en ont pas encore.
+insert into public.jkbat_staff_assignments (
+  staff_user_id,
+  source_type,
+  source_id,
+  title,
+  client_name,
+  client_phone,
+  address,
+  trade,
+  scheduled_date,
+  scheduled_time,
+  notes,
+  priority,
+  status,
+  updated_at
+)
+select
+  p.id,
+  'TACHE',
+  '__JKCHAT__:' || p.id::text,
+  'Conversation JKBat',
+  'JKBat',
+  '',
+  '',
+  '',
+  null,
+  null,
+  'Canal technique de messagerie JKBat Équipe ↔ JKBat Pro. Ne pas supprimer.',
+  'NORMALE',
+  'TERMINÉE',
+  now()
+from public.jkbat_staff_profiles p
+where coalesce(p.active,false)=true
+  and not exists (
+    select 1
+    from public.jkbat_staff_assignments a
+    where a.staff_user_id=p.id
+      and a.source_id='__JKCHAT__:' || p.id::text
+  );
+
+-- 2) Fonction interne : garantit qu'une ancre existe pour un salarié donné.
+create or replace function public.jkbat_ensure_staff_chat_anchor(p_staff_user_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_id uuid;
+begin
+  if p_staff_user_id is null then
+    raise exception 'staff user required';
+  end if;
+
+  select a.id
+    into v_id
+  from public.jkbat_staff_assignments a
+  where a.staff_user_id=p_staff_user_id
+    and a.source_id='__JKCHAT__:' || p_staff_user_id::text
+  order by a.created_at desc nulls last
+  limit 1;
+
+  if v_id is not null then
+    return v_id;
+  end if;
+
+  insert into public.jkbat_staff_assignments (
+    staff_user_id,
+    source_type,
+    source_id,
+    title,
+    client_name,
+    client_phone,
+    address,
+    trade,
+    scheduled_date,
+    scheduled_time,
+    notes,
+    priority,
+    status,
+    updated_at
+  ) values (
+    p_staff_user_id,
+    'TACHE',
+    '__JKCHAT__:' || p_staff_user_id::text,
+    'Conversation JKBat',
+    'JKBat',
+    '',
+    '',
+    '',
+    null,
+    null,
+    'Canal technique de messagerie JKBat Équipe ↔ JKBat Pro. Ne pas supprimer.',
+    'NORMALE',
+    'TERMINÉE',
+    now()
+  )
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+-- 3) À chaque création / réactivation d'un compte salarié, créer automatiquement l'ancre.
+create or replace function public.jkbat_staff_profile_chat_anchor_trg()
+returns trigger
+language plpgsql
+security definer
+set search_path=public
+as $$
+begin
+  if coalesce(new.active,false)=true then
+    perform public.jkbat_ensure_staff_chat_anchor(new.id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_jkbat_staff_profile_chat_anchor on public.jkbat_staff_profiles;
+create trigger trg_jkbat_staff_profile_chat_anchor
+after insert or update of active on public.jkbat_staff_profiles
+for each row
+execute function public.jkbat_staff_profile_chat_anchor_trg();
+
+-- 4) Sécurité : fonctions internes uniquement.
+revoke all on function public.jkbat_ensure_staff_chat_anchor(uuid) from public;
+revoke all on function public.jkbat_ensure_staff_chat_anchor(uuid) from anon;
+revoke all on function public.jkbat_ensure_staff_chat_anchor(uuid) from authenticated;
+revoke all on function public.jkbat_staff_profile_chat_anchor_trg() from public;
+revoke all on function public.jkbat_staff_profile_chat_anchor_trg() from anon;
+revoke all on function public.jkbat_staff_profile_chat_anchor_trg() from authenticated;
+
+-- 5) Rechargement du schéma PostgREST.
+notify pgrst, 'reload schema';
+
+-- Contrôle facultatif : doit retourner une ligne « Conversation JKBat » par salarié actif.
+-- select id, staff_user_id, source_type, source_id, title, status
+-- from public.jkbat_staff_assignments
+-- where source_id like '__JKCHAT__:%';

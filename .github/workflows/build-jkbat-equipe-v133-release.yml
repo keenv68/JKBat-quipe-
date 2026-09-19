@@ -1,0 +1,85 @@
+name: Build JKBat Equipe v1.0.33 Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check source ZIP
+        shell: bash
+        run: |
+          set -e
+          ZIP_FILE="JKBat_Equipe-v1.0.33-Contrats-Entretiens-source.zip"
+          test -f "$ZIP_FILE" || { echo "ERREUR: $ZIP_FILE introuvable à la racine du dépôt."; ls -la; exit 1; }
+          rm -rf extracted
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+          PROJECT_DIR="extracted/JKBat_Equipe-v1.0.33-Contrats-Entretiens-source"
+          test -d "$PROJECT_DIR" || { echo "ERREUR: dossier projet introuvable après extraction."; find extracted -maxdepth 2 -type d -print; exit 1; }
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Check signing secrets
+        env:
+          JKBAT_KEYSTORE_BASE64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$JKBAT_KEYSTORE_BASE64" || { echo "ERREUR: secret JKBAT_KEYSTORE_BASE64 manquant."; exit 1; }
+          test -n "$JKBAT_KEYSTORE_PASSWORD" || { echo "ERREUR: secret JKBAT_KEYSTORE_PASSWORD manquant."; exit 1; }
+
+      - name: Restore release keystore and alias
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_BASE64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -e
+          printf '%s' "$JKBAT_KEYSTORE_BASE64" | base64 --decode > "$PROJECT_DIR/jkbat-services-release.jks"
+          test -s "$PROJECT_DIR/jkbat-services-release.jks"
+          ALIAS="$(keytool -list -v -keystore "$PROJECT_DIR/jkbat-services-release.jks" -storepass "$JKBAT_KEYSTORE_PASSWORD" 2>/dev/null | sed -n 's/^Alias name: //p' | head -n 1)"
+          test -n "$ALIAS" || { echo "ERREUR: alias de signature introuvable."; exit 1; }
+          echo "JKBAT_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+          echo "Signature existante détectée."
+
+      - name: Build signed RELEASE APK
+        env:
+          JKBAT_KEYSTORE_FILE: jkbat-services-release.jks
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
+          gradle :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Prepare final APK
+        run: |
+          set -e
+          APK="$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          cp "$APK" JKBat_Equipe-v1.0.33-RELEASE.apk
+          jarsigner -verify JKBat_Equipe-v1.0.33-RELEASE.apk
+          sha256sum JKBat_Equipe-v1.0.33-RELEASE.apk > JKBat_Equipe-v1.0.33-RELEASE.sha256
+
+      - name: Upload release
+        uses: actions/upload-artifact@v4
+        with:
+          name: JKBat_Equipe-v1.0.33-RELEASE
+          path: |
+            JKBat_Equipe-v1.0.33-RELEASE.apk
+            JKBat_Equipe-v1.0.33-RELEASE.sha256
+          if-no-files-found: error
+          retention-days: 30

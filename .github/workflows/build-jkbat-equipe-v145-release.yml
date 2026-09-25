@@ -1,0 +1,105 @@
+name: Build JKBat Equipe v1.0.45 Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE="JKBat_Equipe-v1.0.45-Secours-Connexion-source.zip"
+          test -f "$ZIP_FILE" || { echo "ERREUR : $ZIP_FILE introuvable."; ls -la; exit 1; }
+
+          rm -rf extracted
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+
+          PROJECT_DIR="extracted/JKBat_Equipe-v1.0.45-Secours-Connexion-source"
+          test -f "$PROJECT_DIR/settings.gradle.kts" || { echo "ERREUR : projet Android introuvable."; exit 1; }
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Verify version and rescue auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'applicationId = "com.jkbat.equipe"' "$PROJECT_DIR/app/build.gradle.kts"
+          grep -q 'versionCode = 45' "$PROJECT_DIR/app/build.gradle.kts"
+          grep -q 'versionName = "1.0.45"' "$PROJECT_DIR/app/build.gradle.kts"
+          grep -q 'Mode secours actif' "$PROJECT_DIR/app/src/main/assets/index.html"
+          if grep -q 'Radio JKBat' "$PROJECT_DIR/app/src/main/assets/index.html"; then
+            echo "ERREUR : la version secours ne doit pas contenir Radio/Météo."
+            exit 1
+          fi
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Check signing secrets
+        env:
+          JKBAT_KEYSTORE_BASE64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$JKBAT_KEYSTORE_BASE64" || { echo "ERREUR: secret JKBAT_KEYSTORE_BASE64 manquant."; exit 1; }
+          test -n "$JKBAT_KEYSTORE_PASSWORD" || { echo "ERREUR: secret JKBAT_KEYSTORE_PASSWORD manquant."; exit 1; }
+
+      - name: Restore release keystore and alias
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_BASE64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$JKBAT_KEYSTORE_BASE64" | base64 --decode > "$PROJECT_DIR/jkbat-services-release.jks"
+          test -s "$PROJECT_DIR/jkbat-services-release.jks"
+
+          ALIAS="$(keytool -list -v \
+            -keystore "$PROJECT_DIR/jkbat-services-release.jks" \
+            -storepass "$JKBAT_KEYSTORE_PASSWORD" 2>/dev/null \
+            | sed -n 's/^Alias name: //p' | head -n 1)"
+
+          test -n "$ALIAS" || { echo "ERREUR: alias de signature introuvable."; exit 1; }
+          echo "JKBAT_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+
+      - name: Build signed RELEASE APK
+        env:
+          JKBAT_KEYSTORE_FILE: jkbat-services-release.jks
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Prepare final APK
+        run: |
+          set -euo pipefail
+          APK="$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          cp "$APK" JKBat_Equipe-v1.0.45-RELEASE.apk
+          jarsigner -verify JKBat_Equipe-v1.0.45-RELEASE.apk
+          sha256sum JKBat_Equipe-v1.0.45-RELEASE.apk > JKBat_Equipe-v1.0.45-RELEASE.sha256
+
+      - name: Upload release
+        uses: actions/upload-artifact@v4
+        with:
+          name: JKBat_Equipe-v1.0.45-RELEASE
+          path: |
+            JKBat_Equipe-v1.0.45-RELEASE.apk
+            JKBat_Equipe-v1.0.45-RELEASE.sha256
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,121 @@
+name: Build JKBat Equipe v1.0.50 Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find and extract JKBat Equipe v1.0.50 source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE="$(find . -maxdepth 2 -type f \( -name 'JKBat_Equipe-v1.0.50*.zip' -o -name '*v150*source*.zip' \) -size +1k -printf '%s %p\n' 2>/dev/null | sort -nr | sed -n '1p' | cut -d' ' -f2-)"
+          if [ -z "${ZIP_FILE:-}" ]; then
+            echo "ERREUR : ZIP JKBat Equipe v1.0.50 introuvable."
+            find . -maxdepth 2 -type f -name '*.zip' -ls || true
+            exit 1
+          fi
+          rm -rf extracted && mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+          SETTINGS="$(find extracted -type f -name 'settings.gradle.kts' | sed -n '1p')"
+          test -n "${SETTINGS:-}" || { echo "ERREUR : projet Android introuvable."; exit 1; }
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Verify v1.0.50 restored business workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          GRADLE="$PROJECT_DIR/app/build.gradle.kts"
+          HTML="$PROJECT_DIR/app/src/main/assets/index.html"
+          grep -q 'applicationId = "com.jkbat.equipe"' "$GRADLE"
+          grep -q 'versionCode = 150' "$GRADLE" || { echo "ERREUR : versionCode v1.0.50 incorrect."; exit 1; }
+          grep -q 'versionName = "1.0.50"' "$GRADLE" || { echo "ERREUR : versionName v1.0.50 incorrect."; exit 1; }
+          grep -q 'JKBAT ÉQUIPE · 1.0.50' "$HTML" || { echo "ERREUR : libellé UI v1.0.50 absent."; exit 1; }
+          grep -q 'jke-149-planning-auto-sync' "$HTML"
+          grep -q 'refreshPlanning149' "$HTML"
+          grep -q 'jkePlanRefresh149' "$HTML"
+          grep -q 'jkbat_staff_assignments?staff_user_id=eq.' "$HTML"
+          grep -q 'setInterval' "$HTML"
+          grep -q 'jke-146-radio-weather-script' "$HTML"
+          grep -q 'Radio JKBat' "$HTML"
+          grep -q 'jke-150-legacy-workflow-restore-script' "$HTML" || { echo "ERREUR : restauration workflow métier absente."; exit 1; }
+          grep -q "'A FAIRE'" "$HTML" || { echo "ERREUR : compatibilité statut A FAIRE absente."; exit 1; }
+          grep -q 'setAssignmentStatus' "$HTML" || { echo "ERREUR : changement de statut absent."; exit 1; }
+          grep -q 'finishAssignment' "$HTML" || { echo "ERREUR : terminaison de mission absente."; exit 1; }
+          grep -q 'openImpossibleReason' "$HTML" || { echo "ERREUR : signalement impossible absent."; exit 1; }
+          grep -q 'openStaffClientSignature107' "$HTML" || { echo "ERREUR : signature client absente."; exit 1; }
+          grep -q 'sendStaffIntervention107' "$HTML" || { echo "ERREUR : PDF client absent."; exit 1; }
+          grep -q 'startLiveGps135' "$HTML" || { echo "ERREUR : GPS live absent."; exit 1; }
+          grep -q 'uploadPhoto' "$HTML" || { echo "ERREUR : photos intervention absentes."; exit 1; }
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Check signing secrets
+        env:
+          JKBAT_KEYSTORE_BASE64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$JKBAT_KEYSTORE_BASE64" || { echo "ERREUR: secret JKBAT_KEYSTORE_BASE64 manquant."; exit 1; }
+          test -n "$JKBAT_KEYSTORE_PASSWORD" || { echo "ERREUR: secret JKBAT_KEYSTORE_PASSWORD manquant."; exit 1; }
+
+      - name: Restore release keystore and alias
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_BASE64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$JKBAT_KEYSTORE_BASE64" | base64 --decode > "$PROJECT_DIR/jkbat-services-release.jks"
+          test -s "$PROJECT_DIR/jkbat-services-release.jks"
+          ALIAS="$(keytool -list -v -keystore "$PROJECT_DIR/jkbat-services-release.jks" -storepass "$JKBAT_KEYSTORE_PASSWORD" 2>/dev/null | sed -n 's/^Alias name: //p' | head -n 1)"
+          test -n "$ALIAS" || { echo "ERREUR: alias de signature introuvable."; exit 1; }
+          echo "JKBAT_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+
+      - name: Build signed RELEASE APK
+        env:
+          JKBAT_KEYSTORE_FILE: jkbat-services-release.jks
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew :app:assembleRelease --no-daemon --stacktrace
+          else
+            gradle :app:assembleRelease --no-daemon --stacktrace
+          fi
+
+      - name: Prepare final APK
+        run: |
+          set -euo pipefail
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk" -type f -name '*.apk' | grep -E '/release/' | sed -n '1p')"
+          test -n "${APK:-}" || { echo "APK release introuvable"; exit 1; }
+          cp "$APK" JKBat_Equipe-v1.0.50-RELEASE.apk
+          jarsigner -verify JKBat_Equipe-v1.0.50-RELEASE.apk
+          sha256sum JKBat_Equipe-v1.0.50-RELEASE.apk > JKBat_Equipe-v1.0.50-RELEASE.sha256
+
+      - name: Upload release
+        uses: actions/upload-artifact@v4
+        with:
+          name: JKBat_Equipe-v1.0.50-RELEASE
+          path: |
+            JKBat_Equipe-v1.0.50-RELEASE.apk
+            JKBat_Equipe-v1.0.50-RELEASE.sha256
+          if-no-files-found: error
+          retention-days: 30

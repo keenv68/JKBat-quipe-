@@ -1,0 +1,85 @@
+name: Build JKBat Equipe v1.0.69 - Fin Intervention Ordre Corrige
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE="$(find . -maxdepth 3 -type f -name 'JKBat_Equipe-v1.0.69-Terrain-Fluide-C49250-source.zip' -size +1k -print -quit)"
+          test -n "${ZIP_FILE:-}" || { echo 'ZIP JKBat Equipe v1.0.69 Premium Palette Saisie Fix introuvable'; exit 1; }
+          rm -rf extracted && mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+          SETTINGS="$(find extracted -type f \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) -print -quit)"
+          test -n "${SETTINGS:-}" || { echo 'Projet Android introuvable'; exit 1; }
+          echo "PROJECT_DIR=$(dirname "$SETTINGS")" >> "$GITHUB_ENV"
+
+      - name: Verify v1.0.69
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'versionCode = 169' "$PROJECT_DIR/app/build.gradle.kts"
+          grep -q 'versionName = "1.0.69"' "$PROJECT_DIR/app/build.gradle.kts"
+          grep -q 'PAUSE_AUTOSYNC_WHILE_TYPING_V1' "$PROJECT_DIR/app/src/main/assets/index.html"
+          grep -q 'ANDROID_FOCUS_DRAFT_STABLE_V1' "$PROJECT_DIR/app/src/main/assets/index.html"
+          grep -q 'SIGNATURES_THEN_FINISH_THEN_CLIENT_PDF_V1' "$PROJECT_DIR/app/src/main/assets/index.html"
+          grep -q 'ONE_STRUCTURED_STOCK_BLOCK_V1' "$PROJECT_DIR/app/src/main/assets/index.html"
+          grep -q 'PER_ASSIGNMENT_PER_REVISION_V1' "$PROJECT_DIR/app/src/main/assets/index.html"
+          grep -q 'SIGNATURES_FINISH_SEND_AUTHORITATIVE_V2' "$PROJECT_DIR/app/src/main/assets/index.html"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Restore keystore
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_BASE64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$JKBAT_KEYSTORE_BASE64" | base64 --decode > "$PROJECT_DIR/jkbat-services-release.jks"
+          test -s "$PROJECT_DIR/jkbat-services-release.jks"
+
+      - name: Build signed APK
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_FILE: jkbat-services-release.jks
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+          JKBAT_KEY_ALIAS: jkbat-services
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew :app:assembleRelease --no-daemon --stacktrace
+          else
+            gradle :app:assembleRelease --no-daemon --stacktrace
+          fi
+
+      - name: Prepare APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk" -type f -name '*.apk' | grep '/release/' | head -1)"
+          test -n "${APK:-}" || { echo 'APK release introuvable'; exit 1; }
+          cp "$APK" JKBat_Equipe-v1.0.69-Terrain-Fluide-C49250.apk
+          jarsigner -verify JKBat_Equipe-v1.0.69-Terrain-Fluide-C49250.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-v1.0.69-Terrain-Fluide-C49250
+          path: JKBat_Equipe-v1.0.69-Terrain-Fluide-C49250.apk
+          if-no-files-found: error

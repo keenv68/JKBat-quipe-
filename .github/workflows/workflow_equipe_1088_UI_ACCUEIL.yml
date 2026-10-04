@@ -1,0 +1,69 @@
+name: JKBat Equipe 1.0.88 - UI Accueil uniquement
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trouver et extraire la source 1.0.88
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="JKBat_Equipe-v1.0.88-UI-Accueil-Client-Style-source.zip"
+          test -f "$ZIP" || { echo "ZIP introuvable: $ZIP"; exit 1; }
+          mkdir -p src1088
+          unzip -q "$ZIP" -d src1088
+      - name: Anti-regression ciblee
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src1088
+          HTML="app/src/main/assets/index.html"
+          grep -q "JKBAT_DRAFT_PERSISTENT_1086" "$HTML"
+          grep -q "JKBAT_REPORT_ONSITE_LOCK_1087" "$HTML"
+          grep -q "GREY_REPORT_UNTIL_SUR_PLACE_V1" "$HTML"
+          grep -q "normalizeStatus(a.status)==='SUR PLACE'||isDone(a)" "$HTML"
+          grep -q 'versionName = "1.0.88"' app/build.gradle.kts
+          grep -q 'jke-1088-home-ui-only' "$HTML"
+          grep -q 'Prochaine intervention' "$HTML"
+          grep -q 'Mon espace' "$HTML"
+          ! grep -q "JKBAT_REPORT_SAVED_AUTHORITY_1085" "$HTML"
+          echo "OK: moteur 1.0.87 conserve; UI accueil 1.0.88 uniquement"
+      - name: Installer Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Installer Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Restaurer signature historique
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          cd src1088
+          echo "$KEYSTORE_B64" | base64 --decode > app/jkbat-services.jks
+      - name: Compiler APK release
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd src1088
+          # Cette archive ne contient pas de Gradle Wrapper (gradlew).
+          # setup-gradle installe Gradle sur le runner : on utilise donc la commande systeme.
+          gradle --version
+          # Restaurer le keystore historique exactement là où build.gradle le cherche
+          printf '%s' "${{ secrets.JKBAT_KEYSTORE_BASE64 }}" | base64 --decode > jkbat-services-release.jks
+          test -s jkbat-services-release.jks || { echo "ERREUR: keystore historique absent ou vide"; exit 1; }
+
+          gradle assembleRelease -x lintVitalAnalyzeRelease -x lintVitalRelease -x lintVitalReportRelease
+      - name: Publier APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-v1.0.88
+          path: src1088/app/build/outputs/apk/release/*.apk

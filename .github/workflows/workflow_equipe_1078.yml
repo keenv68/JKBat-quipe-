@@ -1,0 +1,60 @@
+name: Build JKBat Equipe v1.0.78 - Brouillon Persistant Propre
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf extracted && mkdir extracted
+          unzip -q JKBat_Equipe-v1.0.78-Brouillon-Persistant-Propre-source.zip -d extracted
+      - name: Anti-regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          H=extracted/app/src/main/assets/index.html
+          G=extracted/app/build.gradle.kts
+          grep -q 'versionCode = 178' "$G"
+          grep -q 'versionName = "1.0.78"' "$G"
+          grep -q 'ANDROID_FOCUS_DRAFT_STABLE_V1' "$H"
+          grep -q 'PAUSE_AUTOSYNC_WHILE_TYPING_V1' "$H"
+          grep -q 'SIGNATURES_THEN_FINISH_THEN_CLIENT_PDF_V1' "$H"
+          grep -q 'ONE_STRUCTURED_STOCK_BLOCK_V1' "$H"
+          grep -q 'PER_ASSIGNMENT_PER_REVISION_V1' "$H"
+          grep -q 'SIGNATURES_FINISH_SEND_AUTHORITATIVE_V2' "$H"
+          grep -q 'jke-169-terrain-flow' "$H"
+          grep -q 'jke-170-finitions' "$H"
+          grep -q 'jke-171-pro-events' "$H"
+          grep -q 'LOCALSTORAGE_REPORT_DRAFT_PHOTO_NAV_SAFE_V1' "$H"
+          grep -q "const FIELD_IDS=\['repText','repIssue','repMaterials','repResult121','repRecommendation121','repClientObs121'\]" "$H"
+          grep -q "window.uploadPhoto=async function" "$H"
+          echo 'OK - v1.0.78 et fonctions historiques verrouillees'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Restore release keystore
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_B64"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > extracted/jkbat-services-release.jks
+      - name: Build release APK
+        working-directory: extracted
+        env:
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: gradle :app:assembleRelease --no-daemon
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-v1.0.78-release
+          path: extracted/app/build/outputs/apk/release/*.apk

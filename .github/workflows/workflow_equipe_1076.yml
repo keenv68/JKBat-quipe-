@@ -1,0 +1,49 @@
+name: JKBat Equipe 1.0.76 Brouillon Live Photo Safe
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP=$(find . -maxdepth 2 -type f -name 'JKBat_Equipe-v1.0.76-Brouillon-Live-Photo-Safe-source.zip' -print -quit)
+          test -n "${ZIP:-}" || { echo 'SOURCE ZIP INTROUVABLE'; exit 1; }
+          rm -rf extracted && mkdir extracted && unzip -q "$ZIP" -d extracted
+          echo "SRC=extracted" >> "$GITHUB_ENV"
+      - name: Anti regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          H="$SRC/app/src/main/assets/index.html"; G="$SRC/app/build.gradle.kts"
+          grep -Fq 'versionCode = 176' "$G"; grep -Fq 'versionName = "1.0.76"' "$G"
+          for M in PAUSE_AUTOSYNC_WHILE_TYPING_V1 ANDROID_FOCUS_DRAFT_STABLE_V1 SIGNATURES_THEN_FINISH_THEN_CLIENT_PDF_V1 ONE_STRUCTURED_STOCK_BLOCK_V1 PER_ASSIGNMENT_PER_REVISION_V1 SIGNATURES_FINISH_SEND_AUTHORITATIVE_V2 jke-169-terrain-flow jke-170-finitions jke-171-pro-events JKBAT_EQUIPE_1073_LOCKS JKBAT_EQUIPE_1074_AUTO_CLOSE client_and_technician_signed signed_report_sent_to_client JKBAT_EQUIPE_1075_PERSISTENT_DRAFT REPORT_FIELDS_LOCAL_DRAFT_SURVIVES_PHOTOS_NAVIGATION_RESTART_V1 JKBAT_EQUIPE_1076_LIVE_DRAFT INPUT_EACH_KEY_PHOTO_FREEZE_RESTORE_LOCAL_NEWER_V1 before-photo-picker photo-freeze photo-restore; do grep -Fq "$M" "$H" || { echo "REGRESSION: $M absent"; exit 1; }; done
+          echo 'ANTI-REGRESSION EQUIPE 1.0.76 OK'
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.9' }
+      - name: Restore keystore
+        shell: bash
+        env: { JKBAT_KEYSTORE_BASE64: '${{ secrets.JKBAT_KEYSTORE_BASE64 }}' }
+        run: |
+          set -euo pipefail
+          printf '%s' "$JKBAT_KEYSTORE_BASE64" | base64 --decode > "$SRC/jkbat-services-release.jks"
+          test -s "$SRC/jkbat-services-release.jks"
+      - name: Build signed APK
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_FILE: jkbat-services-release.jks
+          JKBAT_KEYSTORE_PASSWORD: '${{ secrets.JKBAT_KEYSTORE_PASSWORD }}'
+          JKBAT_KEY_ALIAS: jkbat-services
+        run: |
+          set -euo pipefail
+          cd "$SRC"; gradle :app:assembleRelease --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-v1.0.76-Brouillon-Live-Photo-Safe
+          path: extracted/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error

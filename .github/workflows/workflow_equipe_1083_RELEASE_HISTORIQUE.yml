@@ -1,0 +1,62 @@
+name: Build JKBat Equipe v1.0.83 - Signature Directe CR Enregistre
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source
+        run: |
+          rm -rf extracted && mkdir extracted
+          unzip -q JKBat_Equipe-v1.0.83-Signature-Directe-CR-Enregistre-source.zip -d extracted
+      - name: Anti-regression checks
+        run: |
+          set -euo pipefail
+          H=extracted/app/src/main/assets/index.html
+          grep -q 'versionCode = 183' extracted/app/build.gradle.kts
+          grep -q 'versionName = "1.0.83"' extracted/app/build.gradle.kts
+          grep -q 'JKBAT_DRAFT_PERSISTENT_1078' "$H"
+          grep -q 'JKBAT_SIGNATURE_REPORT_SAVED_1079' "$H"
+          grep -q 'JKBAT_REPORT_STATUS_AUTHORITY_1081' "$H"
+          grep -q 'JKBAT_SAVED_REPORT_SIGNATURE_AUTHORITY_1082' "$H"
+          grep -q 'JKBAT_SIGNATURE_DIRECT_AUTHORITY_1083' "$H"
+          grep -q 'SAVED_SERVER_REPORT_DIRECT_SIGNATURE_GATE_V1' "$H"
+          grep -q "replace(/\\[\\u0300-\\u036f\\]/g" "$H" || grep -q "normalize('NFD')" "$H"
+          grep -q 'rapport VALIDÉ/MISE À JOUR = autorisé à signer' "$H"
+          # v1.0.80: l'ancien contrôle peut rester dans la fonction d'envoi historique ;
+          # le point important est que l'ouverture de signature active ne le réutilise plus.
+          grep -q "window.openStaffClientSignature107=function(id)" "$H"
+          grep -q "rapport VALIDÉ/MISE À JOUR = autorisé à signer" "$H"
+          grep -q 'REPORT_NOTIFY_CLIENT_THEN_TECH_AUTO_FINISH_SEND_V1' "$H"
+          grep -q 'SIGNATURES_THEN_FINISH_THEN_CLIENT_PDF_V1' "$H"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Restore historical JKBat Equipe keystore
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_BASE64: '${{ secrets.JKBAT_KEYSTORE_BASE64 }}'
+        run: |
+          set -euo pipefail
+          printf '%s' "$JKBAT_KEYSTORE_BASE64" | base64 --decode > extracted/jkbat-services-release.jks
+          test -s extracted/jkbat-services-release.jks
+      - name: Build signed RELEASE APK
+        shell: bash
+        working-directory: extracted
+        env:
+          JKBAT_KEYSTORE_FILE: jkbat-services-release.jks
+          JKBAT_KEYSTORE_PASSWORD: '${{ secrets.JKBAT_KEYSTORE_PASSWORD }}'
+          JKBAT_KEY_ALIAS: jkbat-services
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+      - name: Prepare APK
+        run: cp extracted/app/build/outputs/apk/release/app-release.apk JKBat-Equipe-v1.0.83.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-v1.0.83-RELEASE-HISTORIQUE
+          path: JKBat-Equipe-v1.0.83.apk
+          if-no-files-found: error

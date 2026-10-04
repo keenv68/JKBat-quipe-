@@ -1,0 +1,60 @@
+name: JKBat Equipe 1.0.87 - Persistance CR + grise hors site
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trouver et extraire la source 1.0.87
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="JKBat_Equipe-v1.0.87-Persistance-CR-Grise-Hors-Site-source.zip"
+          test -f "$ZIP" || { echo "ZIP introuvable: $ZIP"; exit 1; }
+          mkdir -p src1087
+          unzip -q "$ZIP" -d src1087
+      - name: Anti-regression ciblee
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src1087
+          HTML="app/src/main/assets/index.html"
+          grep -q "JKBAT_DRAFT_PERSISTENT_1086" "$HTML"
+          grep -q "JKBAT_REPORT_ONSITE_LOCK_1087" "$HTML"
+          grep -q "GREY_REPORT_UNTIL_SUR_PLACE_V1" "$HTML"
+          grep -q "normalizeStatus(a.status)==='SUR PLACE'||isDone(a)" "$HTML"
+          grep -q 'versionName = "1.0.87"' app/build.gradle.kts
+          ! grep -q "JKBAT_REPORT_SAVED_AUTHORITY_1085" "$HTML"
+          echo "OK: persistance conservee; seul verrou hors site ajoute"
+      - name: Installer Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Installer Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Restaurer signature historique
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.JKBAT_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          cd src1087
+          echo "$KEYSTORE_B64" | base64 --decode > app/jkbat-services.jks
+      - name: Compiler APK release
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_PASSWORD: ${{ secrets.JKBAT_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd src1087
+          chmod +x gradlew
+          ./gradlew assembleRelease
+      - name: Publier APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-v1.0.87
+          path: src1087/app/build/outputs/apk/release/*.apk

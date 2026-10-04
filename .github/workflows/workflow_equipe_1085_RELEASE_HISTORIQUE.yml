@@ -1,0 +1,57 @@
+name: Build JKBat Equipe v1.0.85 - Validation CR Reelle
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source
+        run: |
+          rm -rf extracted && mkdir extracted
+          unzip -q JKBat_Equipe-v1.0.85-Validation-CR-Reelle-source.zip -d extracted
+      - name: Anti-regression checks
+        run: |
+          set -euo pipefail
+          H=extracted/app/src/main/assets/index.html
+          grep -q 'versionCode = 185' extracted/app/build.gradle.kts
+          grep -q 'versionName = "1.0.85"' extracted/app/build.gradle.kts
+          grep -q 'JKBAT_DRAFT_PERSISTENT_1078' "$H"
+          grep -q 'JKBAT_REPORT_SAVED_AUTHORITY_1085' "$H"
+          grep -q "localStorage.setItem('jkbat_report_saved_'" "$H"
+          grep -q "localStorage.getItem('jkbat_report_saved_'" "$H"
+          grep -q 'REPORT_NOTIFY_CLIENT_THEN_TECH_AUTO_FINISH_SEND_V1' "$H"
+          grep -q 'SIGNATURES_THEN_FINISH_THEN_CLIENT_PDF_V1' "$H"
+          # Les patchs cassés 1.0.79/1.0.82 ne doivent plus exister.
+          ! grep -q '\\n<script id="jke-179' "$H"
+          ! grep -q '\\n<script id="jke-182' "$H"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Restore historical JKBat Equipe keystore
+        shell: bash
+        env:
+          JKBAT_KEYSTORE_BASE64: '${{ secrets.JKBAT_KEYSTORE_BASE64 }}'
+        run: |
+          set -euo pipefail
+          printf '%s' "$JKBAT_KEYSTORE_BASE64" | base64 --decode > extracted/jkbat-services-release.jks
+          test -s extracted/jkbat-services-release.jks
+      - name: Build signed RELEASE APK
+        shell: bash
+        working-directory: extracted
+        env:
+          JKBAT_KEYSTORE_FILE: jkbat-services-release.jks
+          JKBAT_KEYSTORE_PASSWORD: '${{ secrets.JKBAT_KEYSTORE_PASSWORD }}'
+          JKBAT_KEY_ALIAS: jkbat-services
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+      - name: Prepare APK
+        run: cp extracted/app/build/outputs/apk/release/app-release.apk JKBat-Equipe-v1.0.85.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-v1.0.85-RELEASE-HISTORIQUE
+          path: JKBat-Equipe-v1.0.85.apk
+          if-no-files-found: error

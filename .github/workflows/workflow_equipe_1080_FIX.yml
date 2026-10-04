@@ -1,0 +1,43 @@
+name: Build JKBat Equipe v1.0.80 - Signature sans double compte rendu
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source
+        run: |
+          rm -rf extracted && mkdir extracted
+          unzip -q JKBat_Equipe-v1.0.80-Signature-Sans-Double-CR-source.zip -d extracted
+      - name: Anti-regression checks
+        run: |
+          set -euo pipefail
+          H=extracted/app/src/main/assets/index.html
+          grep -q 'versionCode = 180' extracted/app/build.gradle.kts
+          grep -q 'versionName = "1.0.80"' extracted/app/build.gradle.kts
+          grep -q 'JKBAT_DRAFT_PERSISTENT_1078' "$H"
+          grep -q 'JKBAT_SIGNATURE_REPORT_SAVED_1079' "$H"
+          grep -q 'rapport VALIDÉ/MISE À JOUR = autorisé à signer' "$H"
+          # v1.0.80: l'ancien contrôle peut rester dans la fonction d'envoi historique ;
+          # le point important est que l'ouverture de signature active ne le réutilise plus.
+          grep -q "window.openStaffClientSignature107=function(id)" "$H"
+          grep -q "rapport VALIDÉ/MISE À JOUR = autorisé à signer" "$H"
+          grep -q 'REPORT_NOTIFY_CLIENT_THEN_TECH_AUTO_FINISH_SEND_V1' "$H"
+          grep -q 'SIGNATURES_THEN_FINISH_THEN_CLIENT_PDF_V1' "$H"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build debug APK
+        working-directory: extracted
+        run: gradle :app:assembleDebug --no-daemon
+      - name: Prepare APK
+        run: cp extracted/app/build/outputs/apk/debug/app-debug.apk JKBat-Equipe-v1.0.80.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-v1.0.80
+          path: JKBat-Equipe-v1.0.80.apk

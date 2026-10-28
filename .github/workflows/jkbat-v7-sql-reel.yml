@@ -5,6 +5,7 @@ on:
     branches: [validation-sql-sans-perte-20261028]
     paths:
       - 'tests/postgresql/jkbat_v7_*'
+      - 'tests/postgresql/jkbat_retrait_sans_perte_candidat.sql'
       - '.github/workflows/jkbat-v7-sql-reel.yml'
 jobs:
   sql-v7:

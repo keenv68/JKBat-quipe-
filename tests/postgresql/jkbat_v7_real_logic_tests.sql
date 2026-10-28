@@ -90,4 +90,43 @@ DO $f$ BEGIN
  IF NOT EXISTS(SELECT 1 FROM public.jkbat_staff_assignments WHERE source_id='v7-sans-pieces' AND staff_user_id='cccccccc-cccc-4ccc-8ccc-cccccccccccc' AND archived_at IS NULL)
  THEN RAISE EXCEPTION 'restoration state invalid'; END IF;
 END $f$;
+
+-- Test durci : une mission avec started_at renseigné est non retirable,
+-- même si un vieux client laisse le statut « À FAIRE ».
+INSERT INTO public.jkbat_staff_assignments
+ (id,staff_user_id,source_type,source_id,title,status,started_at)
+VALUES ('12121212-1212-4212-8212-121212121212',
+ 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','TACHE','v7-deja-commencee',
+ 'Mission commencée','À FAIRE',clock_timestamp());
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',false);
+DO $f$ BEGIN
+ BEGIN
+   PERFORM public.jkbat_v7_withdraw_own_assignment('12121212-1212-4212-8212-121212121212');
+   RAISE EXCEPTION 'STARTED_ASSIGNMENT_WITHDRAWN';
+ EXCEPTION WHEN invalid_parameter_value THEN NULL;
+ END;
+END $f$;
+RESET ROLE;
+DO $f$ BEGIN
+ IF EXISTS(SELECT 1 FROM public.jkbat_staff_assignments
+  WHERE source_id='v7-deja-commencee' AND archived_at IS NOT NULL)
+ THEN RAISE EXCEPTION 'STARTED_ASSIGNMENT_ARCHIVED'; END IF;
+END $f$;
+
+-- Test durci : impossible de changer la source d'une mission retirée
+-- pour contourner le marqueur V7 (l'ancien client ne doit rien effacer).
+DO $f$ BEGIN
+ BEGIN
+  UPDATE public.jkbat_staff_assignments SET source_id='v7-changement-interdit'
+  WHERE id='99999999-9999-4999-8999-999999999999';
+  RAISE EXCEPTION 'WITHDRAWN_SOURCE_CHANGED';
+ EXCEPTION WHEN insufficient_privilege THEN NULL;
+ END;
+ IF NOT EXISTS(SELECT 1 FROM public.jkbat_staff_assignments
+  WHERE id='99999999-9999-4999-8999-999999999999'
+  AND source_id='v7-avec-pieces' AND archived_at IS NOT NULL)
+ THEN RAISE EXCEPTION 'WITHDRAWN_RECORD_MUTATED'; END IF;
+END $f$;
+\echo JKBAT V7: protections source + mission commenced passed.
 \echo JKBAT V7: PostgreSQL 17 integration tests passed (fictional data only).

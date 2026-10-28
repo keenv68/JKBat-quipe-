@@ -1,0 +1,39 @@
+name: JKBat - Validation PostgreSQL gratuite, donnees fictives
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - validation-sql-sans-perte-20261028
+    paths:
+      - 'tests/postgresql/**'
+      - '.github/workflows/validation-postgresql-sans-perte.yml'
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_test_only
+          POSTGRES_DB: jkbat_fictif
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validation SQL réelle sur données entièrement fictives
+        env:
+          PGPASSWORD: postgres_test_only
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGDATABASE: jkbat_fictif
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/postgresql/validation_sans_perte.sql

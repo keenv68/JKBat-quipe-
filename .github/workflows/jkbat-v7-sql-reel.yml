@@ -43,6 +43,7 @@ jobs:
           # Le SQL historique construit seulement un fixture, sans tests hérités.
           assert "CREATE TABLE public.jkbat_staff_assignments" in fixture
           Path('/tmp/jkbat_v7_base.sql').write_text(fixture + """
+          CREATE ROLE anon NOLOGIN;
           CREATE TABLE public.jkbat_stock_usage(id uuid PRIMARY KEY,assignment_id uuid NOT NULL);
           CREATE TABLE public.jkbat_stock_movements(id uuid PRIMARY KEY,assignment_id uuid NOT NULL);
           """)

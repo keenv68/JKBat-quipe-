@@ -1,0 +1,67 @@
+name: JKBat Equipe - APK test installable a cote de l'officielle
+on:
+  workflow_dispatch:
+  push:
+    branches: [validation-sql-sans-perte-20261028]
+    paths: ['.github/workflows/validation-equipe-installation-separee.yml']
+jobs:
+  debug-separe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extraire la source historique 1.0.88 et isoler le package
+        run: |
+          set -euo pipefail
+          test -f JKBat_Equipe-v1.0.88-UI-Accueil-Client-Style-source.zip
+          mkdir source-test
+          unzip -q JKBat_Equipe-v1.0.88-UI-Accueil-Client-Style-source.zip -d source-test
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          base=Path('source-test')
+          gradle=base/'app/build.gradle.kts'
+          manifest=base/'app/src/main/AndroidManifest.xml'
+          assert gradle.is_file() and manifest.is_file(), 'Source Android incomplete'
+          old=gradle.read_text(encoding='utf-8')
+          m=re.search(r'(?m)^\s*applicationId\s*=\s*"([^"]+)"',old)
+          assert m, 'applicationId non trouve'
+          assert m.group(1) != 'com.jkbat.equipe.testisolated20261028', 'Source deja modifiee'
+          new,n=re.subn(r'(?m)^(\s*applicationId\s*=\s*)"[^"]+"',
+            r'\g<1>"com.jkbat.equipe.testisolated20261028"',old,count=1)
+          assert n==1, 'Echec modification package'
+          gradle.write_text(new,encoding='utf-8')
+          xml=manifest.read_text(encoding='utf-8')
+          assert 'android:label="JKBat Équipe"' in xml, 'Libelle officiel non trouve'
+          manifest.write_text(xml.replace('android:label="JKBat Équipe"',
+                     'android:label="JKBat Équipe TEST"',1),encoding='utf-8')
+          print('Package officiel originel:',m.group(1))
+          print('Nouveau package de test: com.jkbat.equipe.testisolated20261028')
+          print('Nom Android: JKBat Équipe TEST')
+          PY
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Compiler APK debug separe sans cle de signature officielle
+        working-directory: source-test
+        run: |
+          set -euo pipefail
+          gradle :app:assembleDebug --no-daemon
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Verifier l'identifiant du package du nouvel APK
+        run: |
+          set -euo pipefail
+          APK=source-test/app/build/outputs/apk/debug/app-debug.apk
+          AAPT=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name aapt -type f | sort -V | tail -1)
+          "$AAPT" dump badging "$APK" | grep -m1 "^package: name='com.jkbat.equipe.testisolated20261028'"
+          cp "$APK" JKBat_Equipe_TEST_1.0.88_Installation_Separee.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-TEST-1-0-88-Installation-Separee
+          path: JKBat_Equipe_TEST_1.0.88_Installation_Separee.apk
+          retention-days: 2
+          if-no-files-found: error

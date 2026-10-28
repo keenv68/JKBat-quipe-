@@ -52,3 +52,4 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f /tmp/jkbat_v7_base.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/postgresql/jkbat_retrait_sans_perte_candidat.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/postgresql/jkbat_v7_real_logic_tests.sql
+          python3 tests/postgresql/jkbat_v7_concurrence_test.py

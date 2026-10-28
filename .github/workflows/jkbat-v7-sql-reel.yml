@@ -1,0 +1,52 @@
+name: JKBat V7 - verification du vrai SQL sur PostgreSQL fictif
+on:
+  workflow_dispatch:
+  push:
+    branches: [validation-sql-sans-perte-20261028]
+    paths:
+      - 'tests/postgresql/jkbat_v7_*'
+      - '.github/workflows/jkbat-v7-sql-reel.yml'
+jobs:
+  sql-v7:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: only_for_fictional_CI_database
+          POSTGRES_DB: jkbat_v7_fictif
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Executer la vraie logique V7 sans toucher Supabase
+        env:
+          PGPASSWORD: only_for_fictional_CI_database
+          PGHOST: localhost
+          PGUSER: postgres
+          PGDATABASE: jkbat_v7_fictif
+          PGPORT: '5432'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('tests/postgresql/validation_sans_perte.sql').read_text()
+          mark='-- Technicien affecté peut retirer'
+          assert mark in s
+          fixture=s.split(mark)[0]
+          # Le SQL historique construit seulement un fixture, sans tests hérités.
+          assert "CREATE TABLE public.jkbat_staff_assignments" in fixture
+          Path('/tmp/jkbat_v7_base.sql').write_text(fixture + """
+          CREATE TABLE public.jkbat_stock_usage(id uuid PRIMARY KEY,assignment_id uuid NOT NULL);
+          CREATE TABLE public.jkbat_stock_movements(id uuid PRIMARY KEY,assignment_id uuid NOT NULL);
+          """)
+          PY
+          psql -X -v ON_ERROR_STOP=1 -f /tmp/jkbat_v7_base.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/postgresql/jkbat_retrait_sans_perte_candidat.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/postgresql/jkbat_v7_real_logic_tests.sql

@@ -1,0 +1,40 @@
+name: JKBat Equipe - compilation technique gratuite 1.0.88
+on:
+  workflow_dispatch:
+  push:
+    branches: [validation-sql-sans-perte-20261028]
+    paths: ['.github/workflows/validation-equipe-1088.yml']
+jobs:
+  debug-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verifier le code source historique 1.0.88
+        run: |
+          set -euo pipefail
+          test -f JKBat_Equipe-v1.0.88-UI-Accueil-Client-Style-source.zip
+          mkdir src1088
+          unzip -q JKBat_Equipe-v1.0.88-UI-Accueil-Client-Style-source.zip -d src1088
+          test -f src1088/app/build.gradle.kts
+          test -f src1088/app/src/main/assets/index.html
+          grep -q 'versionName = "1.0.88"' src1088/app/build.gradle.kts
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Compiler un APK debug, sans clé de signature et sans déploiement
+        working-directory: src1088
+        run: |
+          set -euo pipefail
+          gradle :app:assembleDebug --no-daemon --stacktrace
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-1088-Debug-validation-seulement
+          path: src1088/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 2
+          if-no-files-found: error

@@ -1,0 +1,84 @@
+name: JKBat Equipe V7 - integration TEST sans suppression
+on:
+  workflow_dispatch:
+  push:
+    branches: [validation-sql-sans-perte-20261028]
+    paths: ['tests/v7-integration/**', '.github/workflows/validation-equipe-v7-integration.yml']
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare source 1.0.88 avec garde V7 desactivee
+        run: |
+          set -euo pipefail
+          mkdir source-v7-test
+          unzip -q JKBat_Equipe-v1.0.88-UI-Accueil-Client-Style-source.zip -d source-v7-test
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root=Path('source-v7-test')
+          gradle=root/'app/build.gradle.kts'
+          html=root/'app/src/main/assets/index.html'
+          script=Path('tests/v7-integration/v7-team-withdraw.js')
+          assert gradle.is_file() and html.is_file() and script.is_file()
+          g=gradle.read_text(encoding='utf-8')
+          g,n=re.subn(r'(?m)^(\s*applicationId\s*=\s*)"[^"]+"',r'\g<1>"com.jkbat.equipe.v7integrationtest"',g,count=1)
+          assert n==1
+          gradle.write_text(g,encoding='utf-8')
+          h=html.read_text(encoding='utf-8')
+          # Exact 2 historical refresh bugs: archived assignments cannot reappear.
+          bad='.filter(a=>!a?.archived_at||!isDone(a))'
+          assert h.count(bad)==2, 'Unexpected historical refresh source'
+          h=h.replace(bad,'.filter(a=>!a?.archived_at)')
+          assert h.count('.filter(a=>!a?.archived_at)')>=2
+          assert '</body>' in h
+          h=h.replace('</body>','<script src="v7-team-withdraw.js"></script>\n</body>',1)
+          html.write_text(h,encoding='utf-8')
+          (root/'app/src/main/assets/v7-team-withdraw.js').write_bytes(script.read_bytes())
+          assert 'const ENABLED=false' in script.read_text()
+          manifest=root/'app/src/main/AndroidManifest.xml'
+          m=manifest.read_text(encoding='utf-8')
+          m=m.replace('android:label="JKBat Équipe"','android:label="JKBat Équipe V7 TEST"',1)
+          manifest.write_text(m,encoding='utf-8')
+          print('INTEGRATION: 2 filters fixed, distinct package, V7 withdrawal disabled')
+          PY
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verification syntaxe V7 et des filtres sans Cloud
+        run: |
+          set -euo pipefail
+          node --check source-v7-test/app/src/main/assets/v7-team-withdraw.js
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('source-v7-test/app/src/main/assets/index.html').read_text()
+          assert '.filter(a=>!a?.archived_at||!isDone(a))' not in h
+          assert h.count('.filter(a=>!a?.archived_at)')>=2
+          s=Path('source-v7-test/app/src/main/assets/v7-team-withdraw.js').read_text()
+          assert "const ENABLED=false" in s
+          assert "'/rest/v1/rpc/jkbat_v7_withdraw_own_assignment'" in s
+          assert '.delete(' not in s and 'method:\'DELETE\'' not in s
+          print('PASS: guards stable without backend activation')
+          PY
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: gradle/actions/setup-gradle@v4
+        with: {gradle-version: '8.9'}
+      - name: Compile APK V7 integration TEST
+        working-directory: source-v7-test
+        run: gradle :app:assembleDebug --no-daemon
+      - name: Confirmer package sans conflit Android
+        run: |
+          set -euo pipefail
+          APK=source-v7-test/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          AAPT=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name aapt -type f | sort -V | tail -1)
+          "$AAPT" dump badging "$APK" | grep -m1 "^package: name='com.jkbat.equipe.v7integrationtest'"
+          cp "$APK" JKBat_Equipe_V7_INTEGRATION_TEST.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JKBat-Equipe-V7-Integration-TEST-APK
+          path: JKBat_Equipe_V7_INTEGRATION_TEST.apk
+          retention-days: 2
+          if-no-files-found: error

@@ -57,7 +57,8 @@ jobs:
           assert h.count('.filter(a=>!a?.archived_at)')>=2
           s=Path('source-v7-test/app/src/main/assets/v7-team-withdraw.js').read_text()
           assert "const ENABLED=false" in s
-          assert "'/rest/v1/rpc/jkbat_v7_withdraw_own_assignment'" in s
+          assert "'/rest/v1/rpc/jkbat_v7_withdraw_own_assignment'" not in s
+          assert "canWithdraw:()=>false" in s
           assert "method:'DELETE'" not in s and '.from("jkbat_staff_assignments").delete(' not in s
           print('PASS: guards stable without backend activation')
           PY

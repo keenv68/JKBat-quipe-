@@ -23,6 +23,22 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $fn$
 DECLARE st text:=upper(btrim(coalesce(NEW.source_type,'')));
         sid text:=btrim(coalesce(NEW.source_id,''));
 BEGIN
+ -- Un ancien client ne doit pas pouvoir changer la clef source d'une mission retiree
+ -- pour contourner le marqueur de retrait et ses pieces liees.
+ IF TG_OP='UPDATE' AND (
+    upper(btrim(coalesce(OLD.source_type,'')))<>st
+    OR btrim(coalesce(OLD.source_id,''))<>sid
+ ) AND upper(btrim(coalesce(OLD.source_type,''))) IN
+     ('RDV','TACHE','RECURRENCE','INTERVENTION') THEN
+   PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+     'JKBAT-V7:'||upper(btrim(OLD.source_type))||':'||btrim(OLD.source_id),0));
+   IF EXISTS(SELECT 1 FROM public.jkbat_v7_team_withdrawals
+     WHERE source_type=upper(btrim(OLD.source_type))
+       AND source_id=btrim(OLD.source_id) AND active) THEN
+     RAISE EXCEPTION 'JKBAT_V7_CANNOT_CHANGE_WITHDRAWN_SOURCE'
+       USING ERRCODE='42501';
+   END IF;
+ END IF;
  IF st IN ('RDV','TACHE','RECURRENCE','INTERVENTION') AND sid<>'' THEN
    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('JKBAT-V7:'||st||':'||sid,0));
    IF EXISTS(
@@ -82,7 +98,7 @@ BEGIN
   RAISE EXCEPTION 'JKBAT_V7_ARCHIVED_NOT_WITHDRAWABLE' USING ERRCODE='22023';
  END IF;
  current_status:=upper(btrim(coalesce(a.status,'')));
- IF current_status NOT IN ('À FAIRE','A FAIRE','A_FAIRE') OR a.completed_at IS NOT NULL THEN
+ IF current_status NOT IN ('À FAIRE','A FAIRE','A_FAIRE') OR a.completed_at IS NOT NULL OR a.started_at IS NOT NULL THEN
   RAISE EXCEPTION 'JKBAT_V7_MISSION_IN_PROGRESS_OR_DONE' USING ERRCODE='22023';
  END IF;
  -- Le marqueur vient apres l'archivage : ne bloque pas notre propre UPDATE.
@@ -122,7 +138,7 @@ BEGIN
  IF a.id IS NULL OR upper(btrim(a.source_type))<>st OR btrim(a.source_id)<>sid THEN
   RAISE EXCEPTION 'JKBAT_V7_CONCURRENT_CHANGE' USING ERRCODE='40001';
  END IF;
- IF a.completed_at IS NOT NULL OR upper(btrim(coalesce(a.status,''))) LIKE 'TERMIN%'
+ IF a.completed_at IS NOT NULL OR a.started_at IS NOT NULL OR upper(btrim(coalesce(a.status,''))) LIKE 'TERMIN%'
   OR upper(btrim(coalesce(a.status,''))) IN ('EN ROUTE','SUR PLACE','EN COURS','IMPOSSIBLE') THEN
   RAISE EXCEPTION 'JKBAT_V7_HISTORY_LOCKED' USING ERRCODE='23514';
  END IF;

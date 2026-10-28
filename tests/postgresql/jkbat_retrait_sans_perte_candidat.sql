@@ -30,17 +30,17 @@ BEGIN
     OR btrim(coalesce(OLD.source_id,''))<>sid
  ) AND upper(btrim(coalesce(OLD.source_type,''))) IN
      ('RDV','TACHE','RECURRENCE','INTERVENTION') THEN
-   PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
-     'JKBAT-V7:'||upper(btrim(OLD.source_type))||':'||btrim(OLD.source_id),0));
-   IF EXISTS(SELECT 1 FROM public.jkbat_v7_team_withdrawals
-     WHERE source_type=upper(btrim(OLD.source_type))
-       AND source_id=btrim(OLD.source_id) AND active) THEN
-     RAISE EXCEPTION 'JKBAT_V7_CANNOT_CHANGE_WITHDRAWN_SOURCE'
-       USING ERRCODE='42501';
-   END IF;
+   -- Les sources sont immuables : jamais renommer une mission archivée.
+   RAISE EXCEPTION 'JKBAT_V7_OPERATIONAL_SOURCE_IMMUTABLE'
+     USING ERRCODE='42501';
  END IF;
  IF st IN ('RDV','TACHE','RECURRENCE','INTERVENTION') AND sid<>'' THEN
-   PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('JKBAT-V7:'||st||':'||sid,0));
+   -- Les UPDATE ont deja verrouille la ligne; acquerir le verrou advisory
+   -- ici provoquerait une inversion de verrous avec la RPC de retrait.
+   -- INSERT seul arbitre les nouveaux UPSERT concurrents.
+   IF TG_OP='INSERT' THEN
+     PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('JKBAT-V7:'||st||':'||sid,0));
+   END IF;
    IF EXISTS(
      SELECT 1 FROM public.jkbat_v7_team_withdrawals
      WHERE source_type=st AND source_id=sid AND active
